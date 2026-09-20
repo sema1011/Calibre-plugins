@@ -1,0 +1,25 @@
+Ozon.ru Metadata Source Plugin v1.6
+Источник метаданных о книгах с ozon.ru для calibre.
+
+Возможности:
+- Поиск по ISBN, названию и автору
+- Фильтрация результатов только по категории «Книги»
+- Настраиваемая задержка между запросами (защита от блокировки)
+- Настраиваемое количество результатов и таймаут
+- Загрузка обложек
+- Диалог конфигурации (Preferences → Plugins → Ozon.ru → Customize)
+- Обход Cloudflare через curl_cffi с TLS impersonation
+- Автоматическое переключение TLS профилей при 403 ошибке
+
+Установка curl_cffi:
+  1. Создайте venv:
+     python -m venv ~/.local/share/calibre/ozon_venv
+  2. Установите curl_cffi и cloudscraper:
+     ~/.local/share/calibre/ozon_venv/bin/pip install curl_cffi cloudscraper
+  3. Укажите путь к venv в настройках плагина
+
+Решение проблем:
+- 403 Error: Убедитесь что curl_cffi установлен и venv путь верный
+- Timeout: Увеличьте таймаут в настройках (до 60-120 сек)
+- Нет результатов: Отключите "only_books" для более широкого поиска
+- Прокси: Укажите прокси в настройках если нужен
