@@ -21,53 +21,6 @@
 4. Перезапустите Calibre
 5. Включите источник в Настройки → Загрузка метаданных
 
-### Ozon.ru
-
-Источник метаданных для получения информации о книгах с Ozon.ru.
-
-**Возможности:**
-- Поиск по названию, автору, ISBN, Ozon ID
-- Получение аннотации, обложки, рейтинга, жанров, издательства
-- Фильтрация результатов только по категории «Книги»
-- Загрузка обложек
-- Настраиваемая задержка между запросами
-
-**Методы обхода блокировок:**
-1. Мобильный API (`api.ozon.ru`) — не за Cloudflare, использует заголовки Android-приложения
-2. Веб API через `curl_cffi` — TLS impersonation для обхода Cloudflare
-3. Cloudscraper — запасной вариант
-4. HTML-парсинг — финальный fallback
-
-**Требования:**
-- `curl_cffi` — для обхода Cloudflare через TLS impersonation
-
-**Что такое TLS impersonation:**
-Ozon.ru защищён Cloudflare, который проверяет не только HTTP-заголовки, но и TLS-отпечаток клиента. Обычный Python `requests` имеет характерный TLS-отпечаток, который Cloudflare легко определяет как бота. Библиотека `curl_cffi` подменяет TLS-отпечаток на отпечаток реального браузера (Chrome 131, Edge, Safari, Firefox и др.), позволяя проходить проверку Cloudflare. Плагин автоматически перебирает профили при блокировке.
-
-**Установка:**
-1. Соберите ZIP: `cd Ozon && zip -r ozon_metadata.zip __init__.py config.py`
-2. В Calibre: Настройки → Плагины → Загрузить плагин из файла
-3. Выберите скачанный ZIP-файл
-4. Перезапустите Calibre
-5. Установите `curl_cffi` (см. ниже)
-6. Укажите путь к venv в настройках плагина: Настройки → Плагины → Ozon.ru → Настроить
-
-**Установка curl_cffi:**
-```bash
-# 1. Создайте виртуальное окружение
-python -m venv ~/.local/share/calibre/ozon_venv
-
-# 2. Установите curl_cffi
-~/.local/share/calibre/ozon_venv/bin/pip install curl_cffi
-
-# 3. В настройках плагина укажите путь к venv:
-#    Настройки → Плагины → Ozon.ru → Настроить → Путь к venv
-```
-
-> **Gentoo / Arch (PEP 668):** требуется `--break-system-packages` или использование venv.
->
-> **Запасной вариант:** `pip install cloudscraper` — менее надёжный, но работает без venv.
-
 ### ChitaiGorod
 
 Источник метаданных для получения информации о книгах с chitai-gorod.ru.
@@ -91,7 +44,6 @@ python -m venv ~/.local/share/calibre/ozon_venv
 | Плагин | Минимальная версия Calibre |
 |--------|---------------------------|
 | Litres Metadata | 5.0.0 |
-| Ozon.ru | 5.0.0 |
 | ChitaiGorod | 8.9.0 |
 
 ## Лицензия
@@ -105,9 +57,6 @@ GPL-3.0 — см. файл [LICENSE](LICENSE)
 ```bash
 cd Litres
 zip -r LitRes_Metadata.zip __init__.py
-
-cd ../Ozon
-zip -r ozon_metadata.zip __init__.py config.py
 
 cd ../chitai-gorod
 zip -r chitai-gorod.zip __init__.py
