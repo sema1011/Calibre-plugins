@@ -181,10 +181,6 @@ class Labirint(Source):
             author = card.find(class_=re.compile(r'product-card__author|author', re.I))
             auth = author.get_text(strip=True) if author else None
 
-            # Цена
-            price = card.find(class_=re.compile(r'product-card__price|price', re.I))
-            price_text = price.get_text(strip=True) if price else None
-
             # Изображение
             img = card.find('img', class_=re.compile(r'book-img-cover|cover', re.I))
             img_url = img.get('data-src') or img.get('src', '') if img else ''
@@ -201,7 +197,6 @@ class Labirint(Source):
             results.append({
                 'title': title_text,
                 'author': auth,
-                'price': price_text,
                 'img_url': img_url,
                 'book_id': book_id,
             })

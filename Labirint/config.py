@@ -12,6 +12,9 @@ prefs.defaults['delay_seconds'] = 1
 prefs.defaults['max_results'] = 5
 prefs.defaults['timeout'] = 30
 
+# Legacy DEFAULTS для совместимости с плагином
+DEFAULTS = dict(prefs.defaults)
+
 
 def save_settings(settings):
     for k, v in settings.items():
