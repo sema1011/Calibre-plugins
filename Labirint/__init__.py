@@ -15,7 +15,7 @@ class Labirint(Source):
     description = _('Downloads book metadata from Labirint.ru')
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
-    version = (1, 3, 17)
+    version = (1, 3, 18)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -310,6 +310,8 @@ class Labirint(Source):
 
             if isbn:
                 mi.set_identifier('isbn', isbn)
+            if book_id:
+                mi.set_identifier('labirint', book_id)
             if description:
                 mi.comments = description
                 mi.has_html_comments = True
