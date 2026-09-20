@@ -143,57 +143,135 @@ class ChitaiGorod(Source):
 
     # ── Токен ──────────────────────────────────────────────────────
 
-    def _get_anon_token(self, br, log, timeout):
-        url = f'{self.API_URL}/web/api/v1/auth/anonymous'
-        old_headers = list(br.addheaders)
-        try:
-            br.addheaders = old_headers + [
-                ('Content-Type', 'application/json'),
-                ('Accept', 'application/json'),
-            ]
-            resp = br.open_novisit(url, data=b'{}', timeout=timeout)
-            raw = resp.read().decode('utf-8', errors='replace')
-            data = json.loads(raw)
+    def _parse_author_name(self, author_data):
+        """Извлекает имя автора из dict или строки."""
+        if isinstance(author_data, dict):
+            first = author_data.get('firstName', '')
+            last = author_data.get('lastName', '')
+            middle = author_data.get('middleName', '')
+            parts = [p for p in (first, middle, last) if p]
+            return ' '.join(parts).strip()
+        return str(author_data).strip()
 
-            token = self._find_token(data)
-            if token:
-                if token.startswith('Bearer '):
-                    token = token[7:]
-                log.info('ChitaiGorod: анонимный токен получен')
-                return token
-            log.error(f'ChitaiGorod: токен не найден в ответе: {raw[:300]}')
-        except Exception as e:
-            log.error(f'ChitaiGorod: ошибка получения токена: {e}')
-        finally:
-            br.addheaders = old_headers
+    def _parse_publisher_name(self, pub_data):
+        """Извлекает название издательства из dict или строки."""
+        if isinstance(pub_data, dict):
+            return pub_data.get('title', '') or pub_data.get('name', '')
+        return str(pub_data).strip()
+
+    def _find_product_by_isbn(self, br, log, isbn, token, timeout):
+        """Пытается найти продукт по ISBN через API product info."""
+        for isbn_var in [isbn, re.sub(r'[^0-9Xx]', '', isbn)]:
+            for endpoint in [
+                f'{self.API_URL}/web/api/v1/products/info/{isbn_var}',
+                f'{self.API_URL}/web/api/v3/products/info/{isbn_var}',
+                f'{self.API_URL}/web/api/v1/products/slug/{isbn_var}',
+            ]:
+                old_headers = list(br.addheaders)
+                try:
+                    br.addheaders = old_headers + [
+                        ('Authorization', f'Bearer {token}'),
+                        ('Accept', 'application/json'),
+                    ]
+                    resp = br.open_novisit(endpoint, timeout=timeout)
+                    raw = resp.read().decode('utf-8', errors='replace')
+                    data = json.loads(raw)
+                except Exception:
+                    continue
+                finally:
+                    br.addheaders = old_headers
+
+                item = data.get('data', data) if isinstance(data, dict) else data
+                if item and isinstance(item, dict):
+                    mi = self._parse_product_data(item, log)
+                    if mi:
+                        slug = item.get('slug', '')
+                        prod_id = item.get('id', '')
+                        if mi.identifiers.get('isbn', '') == isbn_var \
+                                or re.sub(r'[^0-9Xx]', '', mi.identifiers.get('isbn', '')) == isbn_var:
+                            log.info(f'ChitaiGorod [ISBN lookup]: {mi.title}')
+                            self._set_ids(mi, slug, prod_id)
+                            return mi
         return None
 
-    def _find_token(self, obj, depth=0):
-        if depth > 5:
-            return None
-        if isinstance(obj, str):
-            if (obj.startswith('eyJ') or obj.startswith('Bearer eyJ')) and len(obj) > 20:
-                return obj[7:] if obj.startswith('Bearer ') else obj
-            return None
-        if isinstance(obj, dict):
-            for key in ('token', 'accessToken', 'access_token',
-                        'jwt', 'value', 'data'):
-                if key in obj:
-                    result = self._find_token(obj[key], depth + 1)
+    def _extract_annotation(self, html, log):
+        """Извлекает аннотацию/описание из HTML страницы продукта."""
+        for m in re.finditer(
+                r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+                html, re.DOTALL):
+            try:
+                ld_data = json.loads(m.group(1))
+                desc = self._find_jsonld_description(ld_data)
+                if desc and len(desc) > 20:
+                    return desc
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        for pat in [
+                r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
+                r'<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']*)["\']',
+                r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']',
+                r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*property=["\']og:description["\']']:
+            m = re.search(pat, html, re.IGNORECASE)
+            if m:
+                desc = m.group(1).strip()
+                if desc and len(desc) > 20:
+                    return desc
+
+        for cls in (
+                'annotation', 'description', 'about-book', 'book-description',
+                'annotation-text', 'description-text', 'product-description',
+                'product-info-description', 'short-annotation', 'full-description'):
+            for tag in ('div', 'span', 'p', 'section', 'article'):
+                pat = rf'<{tag}[^>]*class=["\'][^"\']*{cls}[^"\']*["\'][^>]*>(.*?)</{tag}>'
+                m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
+                if m:
+                    text = re.sub(r'<[^>]+>', ' ', m.group(1))
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    if text and len(text) > 20:
+                        return text
+
+        for pat in [
+                r'<[^>]*itemprop=["\']description["\'][^>]*>(.*?)</[^>]+>',
+                r'<meta[^>]*itemprop=["\']description["\'][^>]*content=["\']([^"\']*)["\']']:
+            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
+            if m:
+                text = re.sub(r'<[^>]+>', ' ', m.group(1) if m.lastindex == 1
+                              else m.group(1))
+                text = re.sub(r'\s+', ' ', text).strip()
+                if text and len(text) > 20:
+                    return text
+
+        for label in (r'Аннотация', r'Описание', r'Annotation', r'Description'):
+            pat = rf'{label}[^<]*</[^>]+>\s*<[^>]+>([^<]+)'
+            m = re.search(pat, html, re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
+                if text and len(text) > 20:
+                    return text
+
+        return None
+
+    def _find_jsonld_description(self, data):
+        """Ищет описание в JSON-LD structured data."""
+        if isinstance(data, dict):
+            for key in ('description', 'shortDescription', 'abstract'):
+                if key in data and isinstance(data[key], str):
+                    text = re.sub(r'<[^>]+>', ' ', data[key])
+                    text = re.sub(r'\s+', ' ', text).strip()
+                    if text:
+                        return text
+            for key in ('book', 'work', 'product', '@graph'):
+                if key in data:
+                    result = self._find_jsonld_description(data[key])
                     if result:
                         return result
-            for val in obj.values():
-                result = self._find_token(val, depth + 1)
-                if result:
-                    return result
-        if isinstance(obj, list):
-            for item in obj:
-                result = self._find_token(item, depth + 1)
+        elif isinstance(data, list):
+            for item in data:
+                result = self._find_jsonld_description(item)
                 if result:
                     return result
         return None
-
-    # ── Поиск ───────────────────────────────────────────────────────
 
     def _api_search(self, br, log, query, token, timeout, abort, is_isbn=False):
         """Ищет книги через JSON API. Возвращает список dict.
