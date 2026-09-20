@@ -16,7 +16,7 @@ from calibre.ebooks.metadata.book.base import Metadata
 class ChitaiGorod(Source):
     name = 'ChitaiGorod'
     description = 'Метаданные книг с сайта chitai-gorod.ru'
-    author = 'Your Name'
+    author = 'sema1011'
     version = (1, 4, 0)
     minimum_calibre_version = (8, 9, 0)
 
