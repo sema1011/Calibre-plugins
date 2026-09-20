@@ -15,7 +15,7 @@ class Labirint(Source):
     description = _('Downloads book metadata from Labirint.ru')
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
-    version = (1, 3, 15)
+    version = (1, 3, 17)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -452,12 +452,32 @@ class Labirint(Source):
             return None
 
         log(f'Labirint: downloading cover from {cover_url}')
-        cover_data = self._get_page(cover_url, effective_timeout, log=log)
-        if cover_data and len(cover_data) > 100:
+        # Скачиваем обложку как бинарные данные (без decode)
+        try:
+            self._apply_delay(log)
+            br = self.browser
+            resp = br.open_novisit(cover_url, timeout=effective_timeout)
+            cover_data = resp.read()  # raw bytes
             log(f'Labirint: cover downloaded, size={len(cover_data)} bytes')
-            result_queue.put((self, cover_data))
-        else:
-            log(f'Labirint: cover download failed, size={len(cover_data) if cover_data else 0}')
+            if cover_data and len(cover_data) > 100:
+                # Конвертирую WebP → JPEG (Labirint всегда отдаёт WebP)
+                try:
+                    from PIL import Image
+                    import io
+                    img = Image.open(io.BytesIO(cover_data))
+                    if img.format == 'WEBP':
+                        jpeg_buf = io.BytesIO()
+                        img.convert('RGB').save(jpeg_buf, format='JPEG')
+                        cover_data = jpeg_buf.getvalue()
+                        log(f'Labirint: cover converted to JPEG, size={len(cover_data)}')
+                except Exception as conv_err:
+                    log(f'Labirint: cover conversion failed: {conv_err}')
+                
+                result_queue.put((self, cover_data))
+            else:
+                log(f'Labirint: cover too small, size={len(cover_data)}')
+        except Exception as e:
+            log(f'Labirint: cover download error: {e}')
 
         return None
 
