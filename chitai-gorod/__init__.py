@@ -7,6 +7,7 @@ __copyright__ = '2026, Your Name'
 import json
 import re
 from urllib.parse import quote
+from datetime import datetime
 
 from calibre.ebooks.metadata.sources.base import Source
 from calibre.ebooks.metadata.book.base import Metadata

@@ -12,16 +12,10 @@ prefs.defaults['delay_seconds'] = 1
 prefs.defaults['max_results'] = 5
 prefs.defaults['timeout'] = 30
 
-# Legacy DEFAULTS для совместимости с плагином
-DEFAULTS = dict(prefs.defaults)
 
-
-def get_settings():
-    return {
-        'delay_seconds': prefs.get('delay_seconds', 1),
-        'max_results': prefs.get('max_results', 5),
-        'timeout': prefs.get('timeout', 30),
-    }
+def save_settings(settings):
+    for k, v in settings.items():
+        prefs[k] = v
 
 
 class ConfigDialog(QDialog):

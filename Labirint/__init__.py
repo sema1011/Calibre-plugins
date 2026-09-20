@@ -7,7 +7,6 @@ from threading import Thread
 
 from calibre.ebooks.metadata.sources.base import Source
 from calibre.ebooks.metadata.book.base import Metadata
-from calibre.utils.logging import Log
 
 
 class Labirint(Source):
