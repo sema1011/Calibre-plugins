@@ -15,7 +15,7 @@ class Labirint(Source):
     description = _('Downloads book metadata from Labirint.ru')
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
-    version = (1, 3, 14)
+    version = (1, 3, 15)
     minimum_calibre_version = (5, 0, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -295,6 +295,8 @@ class Labirint(Source):
                     cover_url = src
                     if not src.startswith('http'):
                         cover_url = 'https:' + src if src.startswith('//') else self.BASE_URL + src
+                    # Убираем размер из URL (242-0 → 400-0 для JPEG)
+                    cover_url = re.sub(r'/\d+-0$', '/400-0', cover_url)
                     break
             # 2. Fallback — из поиска
             if not cover_url:
@@ -440,6 +442,8 @@ class Labirint(Source):
                 cover_url = src
                 if not src.startswith('http'):
                     cover_url = 'https:' + src if src.startswith('//') else self.BASE_URL + src
+                # Убираем размер из URL (242-0 → 400-0 для JPEG)
+                cover_url = re.sub(r'/\d+-0$', '/400-0', cover_url)
                 log(f'Labirint: found cover image at index {i}: {cover_url[:100]}')
                 break
 
