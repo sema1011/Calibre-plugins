@@ -24,11 +24,6 @@ def get_settings():
     }
 
 
-def save_settings(settings):
-    for k, v in settings.items():
-        prefs[k] = v
-
-
 class ConfigDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -21,7 +21,6 @@ class Labirint(Source):
     capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset([
         'title', 'authors', 'identifier:isbn', 'comments',
-        'publisher', 'pubdate',
     ])
     has_html_comments = True
 

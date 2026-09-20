@@ -7,7 +7,6 @@ __copyright__ = '2026, Your Name'
 import json
 import re
 from urllib.parse import quote
-from datetime import datetime
 
 from calibre.ebooks.metadata.sources.base import Source
 from calibre.ebooks.metadata.book.base import Metadata
@@ -142,92 +141,6 @@ class ChitaiGorod(Source):
 
         return None
 
-    def _extract_annotation(self, html, log):
-        """Извлекает аннотацию/описание из HTML страницы продукта."""
-        # 1. JSON-LD structured data
-        for m in re.finditer(
-                r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-                html, re.DOTALL):
-            try:
-                ld_data = json.loads(m.group(1))
-                desc = self._find_jsonld_description(ld_data)
-                if desc and len(desc) > 20:
-                    return desc
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-        # 2. Meta теги
-        for pat in [
-                r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
-                r'<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']*)["\']',
-                r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']',
-                r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*property=["\']og:description["\']']:
-            m = re.search(pat, html, re.IGNORECASE)
-            if m:
-                desc = m.group(1).strip()
-                if desc and len(desc) > 20:
-                    return desc
-
-        # 3. Специфичные CSS-селекторы
-        for cls in (
-                'annotation', 'description', 'about-book', 'book-description',
-                'annotation-text', 'description-text', 'product-description',
-                'product-info-description', 'short-annotation', 'full-description'):
-            for tag in ('div', 'span', 'p', 'section', 'article'):
-                pat = rf'<{tag}[^>]*class=["\'][^"\']*{cls}[^"\']*["\'][^>]*>(.*?)</{tag}>'
-                m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
-                if m:
-                    text = re.sub(r'<[^>]+>', ' ', m.group(1))
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    if text and len(text) > 20:
-                        return text
-
-        # 4. Schema.org description (itemprop="description")
-        for pat in [
-                r'<[^>]*itemprop=["\']description["\'][^>]*>(.*?)</[^>]+>',
-                r'<meta[^>]*itemprop=["\']description["\'][^>]*content=["\']([^"\']*)["\']']:
-            m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
-            if m:
-                text = re.sub(r'<[^>]+>', ' ', m.group(1) if m.lastindex == 1
-                              else m.group(1))
-                text = re.sub(r'\s+', ' ', text).strip()
-                if text and len(text) > 20:
-                    return text
-
-        # 5. Попробовать найти текст между метками "Аннотация"/"Описание"
-        for label in (r'Аннотация', r'Описание', r'Annotation', r'Description'):
-            pat = rf'{label}[^<]*</[^>]+>\s*<[^>]+>([^<]+)'
-            m = re.search(pat, html, re.IGNORECASE)
-            if m:
-                text = m.group(1).strip()
-                if text and len(text) > 20:
-                    return text
-
-        return None
-
-    def _find_jsonld_description(self, data):
-        """Ищет описание в JSON-LD structured data."""
-        if isinstance(data, dict):
-            # Прямо в объекте
-            for key in ('description', 'shortDescription', 'abstract'):
-                if key in data and isinstance(data[key], str):
-                    text = re.sub(r'<[^>]+>', ' ', data[key])
-                    text = re.sub(r'\s+', ' ', text).strip()
-                    if text:
-                        return text
-            # Вложенный work/book
-            for key in ('book', 'work', 'product', '@graph'):
-                if key in data:
-                    result = self._find_jsonld_description(data[key])
-                    if result:
-                        return result
-        elif isinstance(data, list):
-            for item in data:
-                result = self._find_jsonld_description(item)
-                if result:
-                    return result
-        return None
-
     # ── Токен ──────────────────────────────────────────────────────
 
     def _get_anon_token(self, br, log, timeout):
@@ -313,9 +226,6 @@ class ChitaiGorod(Source):
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(url, timeout=timeout)
-            if resp.code not in (200, 201, 204):
-                log.warning(f'ChitaiGorod: API вернул код {resp.code} для {url}')
-                return []
             raw = resp.read().decode('utf-8', errors='replace')
             data = json.loads(raw)
         except Exception as e:
@@ -583,45 +493,6 @@ class ChitaiGorod(Source):
 
         return None
 
-    def _find_product_by_isbn(self, br, log, isbn, token, timeout):
-        """Пытается найти продукт по ISBN через API product info."""
-        # Пробуем разные варианты ISBN
-        for isbn_var in [isbn, re.sub(r'[^0-9Xx]', '', isbn)]:
-            # Пробуем как slug
-            for endpoint in [
-                f'{self.API_URL}/web/api/v1/products/info/{isbn_var}',
-                f'{self.API_URL}/web/api/v3/products/info/{isbn_var}',
-                f'{self.API_URL}/web/api/v1/products/slug/{isbn_var}',
-            ]:
-                old_headers = list(br.addheaders)
-                try:
-                    br.addheaders = old_headers + [
-                        ('Authorization', f'Bearer {token}'),
-                        ('Accept', 'application/json'),
-                    ]
-                    resp = br.open_novisit(endpoint, timeout=timeout)
-                    raw = resp.read().decode('utf-8', errors='replace')
-                    data = json.loads(raw)
-                except Exception as e:
-                    continue
-                finally:
-                    br.addheaders = old_headers
-
-                item = data.get('data', data) if isinstance(data, dict) else data
-                if item and isinstance(item, dict):
-                    mi = self._parse_product_data(item, log)
-                    if mi:
-                        # Извлекаем slug из ответа
-                        slug = item.get('slug', '')
-                        prod_id = item.get('id', '')
-                        if mi.identifiers.get('isbn', '') == isbn_var \
-                                or re.sub(r'[^0-9Xx]', '', mi.identifiers.get('isbn', '')) == isbn_var:
-                            log.info(f'ChitaiGorod [ISBN lookup]: {mi.title}')
-                            self._set_ids(mi, slug, prod_id)
-                            return mi
-
-        return None
-
     def _set_ids(self, mi, slug, prod_id):
         if prod_id:
             mi.set_identifier('chitaigorod', prod_id)
@@ -630,22 +501,6 @@ class ChitaiGorod(Source):
             if m:
                 mi.set_identifier('chitaigorod', m.group(1))
         mi.source_relevance = 1
-
-    def _parse_author_name(self, author_data):
-        """Извлекает имя автора из dict или строки."""
-        if isinstance(author_data, dict):
-            first = author_data.get('firstName', '')
-            last = author_data.get('lastName', '')
-            middle = author_data.get('middleName', '')
-            parts = [p for p in (first, middle, last) if p]
-            return ' '.join(parts).strip()
-        return str(author_data).strip()
-
-    def _parse_publisher_name(self, pub_data):
-        """Извлекает название издательства из dict или строки."""
-        if isinstance(pub_data, dict):
-            return pub_data.get('title', '') or pub_data.get('name', '')
-        return str(pub_data).strip()
 
     def _parse_product_data(self, item, log):
         """Создаёт Metadata из dict (ответ API).
@@ -736,9 +591,6 @@ class ChitaiGorod(Source):
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(url, timeout=timeout)
-            if resp.code not in (200, 201, 204):
-                log.warning(f'ChitaiGorod [API]: код {resp.code} для {slug}')
-                return None
             raw = resp.read().decode('utf-8', errors='replace')
             data = json.loads(raw)
         except Exception as e:
@@ -956,9 +808,6 @@ class ChitaiGorod(Source):
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(api_url, timeout=timeout)
-            if resp.code not in (200, 201, 204):
-                log.warning(f'ChitaiGorod [cover API]: код {resp.code} для {api_url}')
-                return None
             raw = resp.read().decode('utf-8', errors='replace')
             data = json.loads(raw)
         except Exception as e:

@@ -19,7 +19,6 @@ __docformat__ = 'restructuredtext en'
 
 import json
 import re
-import socket
 import urllib.request
 from queue import Empty, Queue
 from urllib.parse import urlencode
