@@ -15,10 +15,10 @@ class Labirint(Source):
     description = _('Downloads book metadata from Labirint.ru')
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
-    version = (1, 3, 12)
+    version = (1, 3, 13)
     minimum_calibre_version = (5, 0, 0)
 
-    capabilities = frozenset(['identify'])
+    capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset([
         'title', 'authors', 'identifier:isbn', 'comments',
         'publisher', 'pubdate',
@@ -388,6 +388,54 @@ class Labirint(Source):
 
         for t in threads:
             t.join(timeout=effective_timeout + 5)
+
+        return None
+
+    def download_cover(self, log, result_queue, abort,
+                       title=None, authors=None,
+                       identifiers=None, timeout=30,
+                       get_best_cover=False):
+        if identifiers is None:
+            identifiers = {}
+
+        settings = self._get_settings()
+        effective_timeout = settings.get('timeout', 10)
+
+        labirint_id = identifiers.get('labirint')
+        if not labirint_id:
+            isbn = identifiers.get('isbn')
+            if isbn:
+                results = self._search_by_title_author(log, isbn, [], effective_timeout)
+                if results:
+                    labirint_id = results[0].get('book_id', '')
+
+        if not labirint_id:
+            return None
+
+        data = self._fetch_product_page(log, labirint_id, effective_timeout)
+        if not data:
+            return None
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(data, 'html.parser')
+        cover_url = ''
+        imgs = soup.find_all('img')
+        for img in imgs:
+            src = img.get('data-src') or img.get('src', '')
+            if src and ('cover' in src.lower() or 'imo10.labirint.ru' in src):
+                cover_url = src
+                if not src.startswith('http'):
+                    cover_url = 'https:' + src if src.startswith('//') else self.BASE_URL + src
+                break
+
+        if not cover_url:
+            log('Labirint: no cover URL found')
+            return None
+
+        log(f'Labirint: downloading cover from {cover_url}')
+        cover_data = self._get_page(cover_url, effective_timeout, log=log)
+        if cover_data and len(cover_data) > 100:
+            result_queue.put((self, cover_data))
 
         return None
 
