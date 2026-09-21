@@ -4,7 +4,7 @@
 
 ## Плагины
 
-### Labirint
+### Labirint (Требуется проверка)
 
 Источник метаданных для получения информации о книгах с labirint.ru.
 
@@ -16,9 +16,9 @@
 - Парсинг JSON-LD данных для полной аннотации
 
 **Установка:**
-1. Соберите ZIP: `cd Labirint && zip -r Labirint.zip __init__.py config.py plugin-import-name-Labirint.txt`
+1. Скачайте `Labirint.zip` из папки `plugins/`
 2. В Calibre: Настройки → Плагины → Загрузить плагин из файла
-3. Выберите созданный `Labirint.zip`
+3. Выберите `Labirint.zip`
 4. Перезапустите Calibre
 5. Включите источник в Настройки → Загрузка метаданных
 
@@ -33,9 +33,27 @@
 - Поддержка ISBN и внутреннего ID ЛитРес
 
 **Установка:**
-1. Соберите ZIP: `cd Litres && zip -r LitRes_Metadata.zip __init__.py`
+1. Скачайте `Litres_Metadata.zip` из папки `plugins/`
 2. В Calibre: Настройки → Плагины → Загрузить плагин из файла
-3. Выберите созданный `LitRes_Metadata.zip`
+3. Выберите `Litres_Metadata.zip`
+4. Перезапустите Calibre
+5. Включите источник в Настройки → Загрузка метаданных
+
+### Mnogoknig
+
+Источник метаданных для получения информации о книгах с mnogoknig.com/ru.
+
+**Возможности:**
+- Поиск по названию и автору
+- Получение аннотации, обложки, ISBN, издательства, серии, года издания
+- Поддержка поиска по ID книги Mnogoknig (`mnogoknig:1259463`)
+- Автоматическая конвертация обложек WebP → PNG
+- Извлечение индекса серии
+
+**Установка:**
+1. Скачайте `Mnogoknig.zip` из папки `plugins/`
+2. В Calibre: Настройки → Плагины → Загрузить плагин из файла
+3. Выберите `Mnogoknig.zip`
 4. Перезапустите Calibre
 5. Включите источник в Настройки → Загрузка метаданных
 
@@ -50,21 +68,22 @@
 - Fallback на HTML-парсинг
 
 **Установка:**
-1. Соберите ZIP: `cd chitai-gorod && zip -r chitai-gorod.zip __init__.py`
+1. Скачайте `chitai-gorod.zip` из папки `plugins/`
 2. В Calibre: Настройки → Плагины → Загрузить плагин из файла
-3. Выберите созданный `chitai-gorod.zip`
+3. Выберите `chitai-gorod.zip`
 4. Перезапустите Calibre
 5. Включите источник в Настройки → Загрузка метаданных
 
 ## Совместимость
 
-Все плагины совместимы с Calibre 9.15 и выше.
+Все плагины совместимы с Calibre 8.9.0 и выше.
 
 | Плагин | Минимальная версия Calibre |
 |--------|---------------------------|
-| Labirint | 5.0.0 |
-| Litres Metadata | 5.0.0 |
+| Labirint | 8.9.0 |
+| Litres Metadata | 8.9.0 |
 | ChitaiGorod | 8.9.0 |
+| Mnogoknig | 8.9.0 |
 
 ## Лицензия
 
@@ -83,4 +102,7 @@ zip -r LitRes_Metadata.zip __init__.py
 
 cd ../chitai-gorod
 zip -r chitai-gorod.zip __init__.py
+
+cd ../Mnogoknig
+zip -r Mnogoknig.zip __init__.py plugin-import-name-Mnogoknig.txt
 ```

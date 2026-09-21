@@ -21,6 +21,11 @@ def save_settings(settings):
         prefs[k] = v
 
 
+def get_settings():
+    """Возвращает текущие настройки плагина."""
+    return dict(prefs.defaults)
+
+
 class ConfigDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)

@@ -15,7 +15,7 @@ class Labirint(Source):
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
     version = (1, 3, 18)
-    minimum_calibre_version = (5, 0, 0)
+    minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset([
@@ -58,29 +58,38 @@ class Labirint(Source):
 
     # ---- HTTP запросы -------------------------------------------------
 
-    def _get_page(self, url, timeout=10, max_retries=1, log=None):
-        """Запрос страницы с retry logic."""
+    def _get_page(self, url, timeout=10, max_retries=2, log=None):
+        """Запрос страницы через requests — надёжнее curl."""
+        import requests
         for attempt in range(max_retries + 1):
             try:
                 self._apply_delay(log)
-                br = self.browser
-                log(f'Labirint: fetching {url}')
-                resp = br.open_novisit(url, timeout=timeout)
-                data = resp.read().decode('utf-8', errors='replace')
-                log(f'Labirint: fetched {len(data)} bytes')
+                resp = requests.get(
+                    url,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+                    },
+                    timeout=timeout + 15,
+                    verify=False,
+                    allow_redirects=True,
+                )
+                data = resp.text
+                if log:
+                    log(f'Labirint: fetched {len(data)} bytes')
                 return data
             except Exception as e:
-                err_str = str(e).lower()
-                if 'certificate' in err_str or 'ssl' in err_str:
-                    log(f'Labirint: SSL error: {e}')
-                    return None
+                if log:
+                    log(f'Labirint: error (attempt {attempt+1}): {e}')
                 if attempt < max_retries:
-                    wait = (attempt + 1) * 2
-                    log(f'Labirint: error (retry {attempt+1}/{max_retries}): {e}, waiting {wait}s')
+                    wait = (attempt + 1) * 5
+                    if log:
+                        log(f'Labirint: retry {attempt+1}/{max_retries} in {wait}s')
                     time.sleep(wait)
                 else:
-                    log(f'Labirint: error after {max_retries} retries: {e}')
-                    return None
+                    if log:
+                        log(f'Labirint: error after {max_retries} retries: {e}')
         return None
 
     # ---- Поиск --------------------------------------------------------
@@ -447,12 +456,20 @@ class Labirint(Source):
             return None
 
         log(f'Labirint: downloading cover from {cover_url}')
-        # Скачиваем обложку как бинарные данные (без decode)
+        # Скачиваем обложку через requests
         try:
             self._apply_delay(log)
-            br = self.browser
-            resp = br.open_novisit(cover_url, timeout=effective_timeout)
-            cover_data = resp.read()  # raw bytes
+            import requests
+            resp = requests.get(
+                cover_url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': f'{self.BASE_URL}/books/{labirint_id}/',
+                },
+                timeout=effective_timeout + 15,
+                verify=False,
+            )
+            cover_data = resp.content
             log(f'Labirint: cover downloaded, size={len(cover_data)} bytes')
             if cover_data and len(cover_data) > 100:
                 # Конвертирую WebP → JPEG (Labirint всегда отдаёт WebP)

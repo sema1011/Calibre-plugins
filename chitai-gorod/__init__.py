@@ -17,7 +17,7 @@ class ChitaiGorod(Source):
     name = 'ChitaiGorod'
     description = 'Метаданные книг с сайта chitai-gorod.ru'
     author = 'sema1011'
-    version = (1, 4, 0)
+    version = (1, 5, 1)
     minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -29,6 +29,42 @@ class ChitaiGorod(Source):
 
     BASE_URL = 'https://www.chitai-gorod.ru'
     API_URL = 'https://web-agr.chitai-gorod.ru'
+
+    def _get_anon_token(self, br, log, timeout=30):
+        """Получает анонимный токен для API ChitaiGorod."""
+        import urllib.request
+        import ssl
+        
+        token_url = f'{self.API_URL}/web/api/v1/auth/anonymous'
+        
+        try:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            req = urllib.request.Request(
+                token_url,
+                data=b'',  # POST with empty body
+                headers={
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                },
+                method='POST'
+            )
+            resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
+            raw = resp.read().decode('utf-8', errors='replace')
+            data = json.loads(raw)
+            # Токен уже содержит "Bearer " в начале
+            token = data.get('token', {}).get('accessToken', '')
+            if token:
+                log.info(f'ChitaiGorod: анонимный токен получен')
+                return token
+            log.warning('ChitaiGorod: токен не найден в ответе')
+            return None
+        except Exception as e:
+            log.error(f'ChitaiGorod: ошибка получения токена: {e}')
+            return None
 
     def identify(self, log, result_queue, abort,
                  title=None, authors=None, identifiers={}, timeout=30):
@@ -171,7 +207,7 @@ class ChitaiGorod(Source):
                 old_headers = list(br.addheaders)
                 try:
                     br.addheaders = old_headers + [
-                        ('Authorization', f'Bearer {token}'),
+                        ('Authorization', token),
                         ('Accept', 'application/json'),
                     ]
                     resp = br.open_novisit(endpoint, timeout=timeout)
@@ -301,7 +337,7 @@ class ChitaiGorod(Source):
         old_headers = list(br.addheaders)
         try:
             br.addheaders = old_headers + [
-                ('Authorization', f'Bearer {token}'),
+                ('Authorization', token),
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(url, timeout=timeout)
@@ -666,7 +702,7 @@ class ChitaiGorod(Source):
         old_headers = list(br.addheaders)
         try:
             br.addheaders = old_headers + [
-                ('Authorization', f'Bearer {token}'),
+                ('Authorization', token),
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(url, timeout=timeout)
@@ -883,7 +919,7 @@ class ChitaiGorod(Source):
         old_headers = list(br.addheaders)
         try:
             br.addheaders = old_headers + [
-                ('Authorization', f'Bearer {token}'),
+                ('Authorization', token),
                 ('Accept', 'application/json'),
             ]
             resp = br.open_novisit(api_url, timeout=timeout)

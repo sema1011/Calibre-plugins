@@ -34,8 +34,8 @@ class LitResMetadata(Source):
     name = 'LitRes Metadata'
     description = 'Получает метаданные и обложки книг с ЛитРес (litres.ru).'
     author = 'sema1011'
-    version = (1, 0, 6)
-    minimum_calibre_version = (5, 0, 0)
+    version = (1, 0, 7)
+    minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
     touched_fields = frozenset([
@@ -50,7 +50,7 @@ class LitResMetadata(Source):
     LITRES_API_SEARCH = 'https://api.litres.ru/foundation/api/search'
     LITRES_API_ARTS   = 'https://api.litres.ru/foundation/api/arts'
     LITRES_SITE       = 'https://www.litres.ru'
-    LITRES_COVER_URL  = 'https://www.litres.ru/pub/c/cover/{id}.jpg'
+    LITRES_COVER_URL  = 'https://cdn.litres.ru/pub/c/cover_{id}'
 
     # ------------------------------------------------------------------
     # HTTP-запросы
@@ -131,7 +131,11 @@ class LitResMetadata(Source):
     def _extract_title(art):
         for key in ('title', 'name', 'book_title', 'book-title'):
             if key in art and art[key]:
-                return str(art[key]).strip()
+                title = str(art[key]).strip()
+                # Убираем суффиксы формата: (pdf+epub), (EPUB, FB2), и т.д.
+                title = re.sub(r'\s*\(.*?(?:pdf|epub|fb2|mobi|txt|rtf|djvu|cbz).*?\)', '', title, flags=re.I)
+                title = title.strip()
+                return title
         return ''
 
     @staticmethod
@@ -403,7 +407,7 @@ class LitResMetadata(Source):
         cover_url = self._extract_cover_url(art)
         if cover_url and book_id:
             self.cache_identifier_to_cover_url(book_id, cover_url)
-            mi.has_cover = True
+            mi.cover_url = cover_url
 
         return mi
 
@@ -552,10 +556,14 @@ class LitResMetadata(Source):
 
         log('LitRes: загрузка обложки: ' + cover_url)
         try:
-            req = urllib.request.Request(cover_url)
-            req.add_header('User-Agent', 'Mozilla/5.0 (Calibre LitRes Metadata)')
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
+            import requests
+            resp = requests.get(
+                cover_url,
+                headers={'User-Agent': 'Mozilla/5.0 (Calibre LitRes Metadata)'},
+                timeout=timeout + 10,
+                verify=False,
+            )
+            raw = resp.content
             if raw and len(raw) > 1024:
                 result_queue.put((self, raw))
                 log('LitRes: обложка загружена (' + str(len(raw)) + ' байт)')
