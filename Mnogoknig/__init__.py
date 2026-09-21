@@ -9,6 +9,8 @@ __copyright__ = '2026, Mnogoknig Plugin Author'
 __docformat__ = "plaintext"
 
 import re
+from urllib.parse import quote
+
 from calibre.ebooks.metadata.sources.base import Source
 from calibre.ebooks.metadata.book.base import Metadata
 
