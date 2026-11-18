@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 __license__ = 'GPL-3.0-only'
 __copyright__ = '2026'
 __docformat__ = 'restructuredtext en'
@@ -20,6 +21,7 @@ __docformat__ = 'restructuredtext en'
 import json
 import re
 import socket
+import urllib.error
 import urllib.request
 from queue import Empty, Queue
 from urllib.parse import urlencode
@@ -34,7 +36,7 @@ class LitResMetadata(Source):
     name = 'LitRes Metadata'
     description = 'Получает метаданные и обложки книг с ЛитРес (litres.ru).'
     author = 'sema1011'
-    version = (1, 0, 7)
+    version = (1, 0, 8)
     minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -44,26 +46,27 @@ class LitResMetadata(Source):
     ])
 
     supports_gzip_transfer_encoding = True
+    has_html_comments = True
     ignore_ssl_errors = True
     cached_cover_url_is_reliable = True
 
     LITRES_API_SEARCH = 'https://api.litres.ru/foundation/api/search'
     LITRES_API_ARTS   = 'https://api.litres.ru/foundation/api/arts'
     LITRES_SITE       = 'https://www.litres.ru'
-    LITRES_COVER_URL  = 'https://cdn.litres.ru/pub/c/cover_{id}'
+    LITRES_COVER_URL  = 'https://www.litres.ru/pub/c/cover/{id}.jpg'
 
     # ------------------------------------------------------------------
     # HTTP-запросы
     # ------------------------------------------------------------------
 
     def _make_request(self, url, log, timeout=30):
-        log('LitRes: запрос: ' + url)
+        log.info('LitRes: запрос: ' + url)
         try:
-            import urllib.error
             req = urllib.request.Request(url)
             req.add_header('Accept', 'application/json')
             req.add_header('Accept-Language', 'ru-RU,ru;q=0.9,en;q=0.8')
-            req.add_header('User-Agent', 'Mozilla/5.0 (Calibre LitRes Metadata)')
+            req.add_header('User-Agent',
+                           'Mozilla/5.0 (Calibre LitRes Metadata)')
             req.add_header('app-id', '1')
             req.add_header('ui-language-code', 'ru')
             with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -72,11 +75,11 @@ class LitResMetadata(Source):
                 raw = raw.decode('utf-8', errors='replace')
             return json.loads(raw)
         except urllib.error.HTTPError as e:
-            log('LitRes: HTTP ' + str(e.code) + ': ' + str(e.reason))
+            log.error('LitRes: HTTP ' + str(e.code) + ': ' + str(e.reason))
         except socket.timeout:
-            log('LitRes: таймаут запроса')
+            log.error('LitRes: таймаут запроса')
         except Exception as e:
-            log('LitRes: ошибка запроса: ' + str(e))
+            log.error('LitRes: ошибка запроса: ' + str(e))
         return None
 
     def _search_books(self, query, log, timeout=30, limit=20):
@@ -96,6 +99,8 @@ class LitResMetadata(Source):
             payload = data.get('payload', data)
             if isinstance(payload, dict):
                 arts = payload.get('data', [])
+                if not isinstance(arts, list):
+                    arts = []
             else:
                 arts = []
         else:
@@ -133,7 +138,9 @@ class LitResMetadata(Source):
             if key in art and art[key]:
                 title = str(art[key]).strip()
                 # Убираем суффиксы формата: (pdf+epub), (EPUB, FB2), и т.д.
-                title = re.sub(r'\s*\(.*?(?:pdf|epub|fb2|mobi|txt|rtf|djvu|cbz).*?\)', '', title, flags=re.I)
+                title = re.sub(
+                    r'\s*\(.*?(?:pdf|epub|fb2|mobi|txt|rtf|djvu|cbz).*?\)',
+                    '', title, flags=re.I)
                 title = title.strip()
                 return title
         return ''
@@ -284,7 +291,7 @@ class LitResMetadata(Source):
         else:
             return None
         try:
-            val = float(rating)
+            val = float(str(rating).replace(',', '.'))
             # ЛитРес использует 5-балльную шкалу, Calibre — 10-балльную
             if val <= 5.0:
                 val = val * 2.0
@@ -318,7 +325,8 @@ class LitResMetadata(Source):
                         if val.startswith('/'):
                             return LitResMetadata.LITRES_SITE + val
                     elif isinstance(val, dict):
-                        url = val.get('url') or val.get('src') or val.get('link')
+                        url = (val.get('url') or val.get('src')
+                               or val.get('link'))
                         if url and isinstance(url, str):
                             if url.startswith('http'):
                                 return url
@@ -332,7 +340,8 @@ class LitResMetadata(Source):
 
     @staticmethod
     def _extract_series(art):
-        sequences = art.get('sequences') or art.get('series') or art.get('serial')
+        sequences = (art.get('sequences') or art.get('series')
+                     or art.get('serial'))
         if not sequences:
             return None, None
         if isinstance(sequences, str):
@@ -346,7 +355,8 @@ class LitResMetadata(Source):
             s = sequences[0]
             if isinstance(s, dict):
                 name = s.get('title') or s.get('name')
-                num = s.get('sequence_number') or s.get('number') or s.get('sequence')
+                num = (s.get('sequence_number') or s.get('number')
+                       or s.get('sequence'))
                 if name:
                     return str(name).strip(), (str(num) if num else None)
             elif isinstance(s, str):
@@ -363,7 +373,7 @@ class LitResMetadata(Source):
         book_id = self._extract_id(art)
 
         if not title or not authors:
-            log('LitRes: пропущена книга без названия или автора')
+            log.warning('LitRes: пропущена книга без названия или автора')
             return None
 
         mi = Metadata(title, authors)
@@ -373,7 +383,7 @@ class LitResMetadata(Source):
 
         isbn = self._extract_isbn(art)
         if isbn:
-            mi.isbn = isbn
+            mi.set_identifier('isbn', isbn)
 
         comments = self._extract_comments(art)
         if comments:
@@ -430,20 +440,21 @@ class LitResMetadata(Source):
     def identify(self, log, result_queue, abort,
                  title=None, authors=None, identifiers=None,
                  timeout=30):
-        log('LitRes: начало поиска метаданных')
+        log.info('LitRes: начало поиска метаданных')
         identifiers = identifiers or {}
 
         litres_id = identifiers.get('litres', None)
         if litres_id:
-            log('LitRes: поиск по litres ID: ' + str(litres_id))
+            log.info('LitRes: поиск по litres ID: ' + str(litres_id))
             art = self._get_book_details(litres_id, log, timeout)
             if art:
                 mi = self._build_metadata(art, log, source_relevance=0)
                 if mi:
+                    self.clean_downloaded_metadata(mi)
                     result_queue.put(mi)
-                    log('LitRes: книга найдена по ID')
+                    log.info('LitRes: книга найдена по ID')
                     return None
-            log('LitRes: книга не найдена по ID, ищем по названию/автору')
+            log.info('LitRes: книга не найдена по ID, ищем по названию/автору')
 
         isbn = identifiers.get('isbn', None)
         search_tokens = []
@@ -451,79 +462,83 @@ class LitResMetadata(Source):
             search_tokens.append(isbn)
 
         if title:
-            search_tokens += list(self.get_title_tokens(title,
-                                strip_joiners=False, strip_subtitle=False))
+            search_tokens += list(self.get_title_tokens(
+                title, strip_joiners=False, strip_subtitle=False))
         if authors:
-            search_tokens += list(self.get_author_tokens(authors,
-                                only_first_author=True))
+            search_tokens += list(self.get_author_tokens(
+                authors, only_first_author=True))
 
         if not search_tokens:
-            log('LitRes: нет данных для поиска')
+            log.info('LitRes: нет данных для поиска')
             return None
 
         query = ' '.join(search_tokens)
-        log('LitRes: поисковый запрос: ' + query)
+        log.info('LitRes: поисковый запрос: ' + query)
 
         arts = self._search_books(query, log, timeout, limit=20)
-        log('LitRes: найдено результатов: ' + str(len(arts)))
+        log.info('LitRes: найдено результатов: ' + str(len(arts)))
 
         if abort.is_set():
-            log('LitRes: поиск прерван')
+            log.info('LitRes: поиск прерван')
             return None
 
         if not arts and isbn and title:
-            log('LitRes: повторный поиск без ISBN')
+            if abort.is_set():
+                log.info('LitRes: поиск прерван')
+                return None
+            log.info('LitRes: повторный поиск без ISBN')
             title_tokens = list(self.get_title_tokens(title))
             query2 = ' '.join(title_tokens)
             if authors:
                 query2 += ' ' + ' '.join(
                     self.get_author_tokens(authors, only_first_author=True))
             arts = self._search_books(query2, log, timeout, limit=20)
-            log('LitRes: найдено при повторном поиске: ' + str(len(arts)))
+            log.info('LitRes: найдено при повторном поиске: '
+                     + str(len(arts)))
 
         if not arts:
-            log('LitRes: ничего не найдено')
+            log.info('LitRes: ничего не найдено')
             return None
 
         relevance = 0
         for art in arts:
             if abort.is_set():
-                log('LitRes: поиск прерван')
+                log.info('LitRes: поиск прерван')
                 break
             mi = self._build_metadata(art, log, source_relevance=relevance)
             relevance += 1
             if mi:
+                self.clean_downloaded_metadata(mi)
                 result_queue.put(mi)
 
-        log('LitRes: поиск завершён')
+        log.info('LitRes: поиск завершён')
         return None
 
     def download_cover(self, log, result_queue, abort,
                        title=None, authors=None, identifiers=None,
                        timeout=30, get_best_cover=False):
-        log('LitRes: загрузка обложки')
+        log.info('LitRes: загрузка обложки')
         identifiers = identifiers or {}
 
         cover_url = self.get_cached_cover_url(identifiers)
 
         if not cover_url:
-            log('LitRes: нет закэшированного URL, ищем книгу')
+            log.info('LitRes: нет закэшированного URL, ищем книгу')
             tmp_queue = Queue()
             self.identify(log, tmp_queue, abort,
-                         title=title, authors=authors,
-                         identifiers=identifiers, timeout=timeout)
-            try:
-                while True:
+                          title=title, authors=authors,
+                          identifiers=identifiers, timeout=timeout)
+            while not tmp_queue.empty():
+                try:
                     mi = tmp_queue.get_nowait()
-                    litres_id = mi.identifiers.get('litres', '') if mi.identifiers else ''
-                    if litres_id:
-                        cover_url = self.cached_identifier_to_cover_url(litres_id)
-                        if cover_url:
-                            break
-                    else:
-                        litres_id = ''
-            except Empty:
-                pass
+                except Empty:
+                    break
+                litres_id = (mi.identifiers.get('litres', '')
+                             if mi.identifiers else '')
+                if litres_id:
+                    cover_url = self.cached_identifier_to_cover_url(litres_id)
+                    if cover_url:
+                        break
 
         # Фоллбэк: если ID был в identifiers — конструируем URL напрямую
         if not cover_url:
@@ -534,43 +549,48 @@ class LitResMetadata(Source):
         # Фоллбэк: если ID не был найден через кэш, пробуем поискать
         # среди результатов identify ещё раз
         if not cover_url and not identifiers.get('litres'):
-            log('LitRes: фоллбэк обложки — повторный поиск')
+            log.info('LitRes: фоллбэк обложки — повторный поиск')
             tmp_queue = Queue()
             self.identify(log, tmp_queue, abort,
-                         title=title, authors=authors,
-                         identifiers=identifiers, timeout=timeout)
-            try:
-                while True:
+                          title=title, authors=authors,
+                          identifiers=identifiers, timeout=timeout)
+            while not tmp_queue.empty():
+                try:
                     mi = tmp_queue.get_nowait()
-                    litres_id = mi.identifiers.get('litres', '') if mi.identifiers else ''
-                    if litres_id:
-                        cover_url = self.LITRES_COVER_URL.format(id=litres_id)
-                        if cover_url:
-                            break
-            except Empty:
-                pass
+                except Empty:
+                    break
+                litres_id = (mi.identifiers.get('litres', '')
+                             if mi.identifiers else '')
+                if litres_id:
+                    cover_url = self.LITRES_COVER_URL.format(id=litres_id)
+                    if cover_url:
+                        break
 
         if not cover_url:
-            log('LitRes: URL обложки не найден')
+            log.info('LitRes: URL обложки не найден')
             return
 
-        log('LitRes: загрузка обложки: ' + cover_url)
+        log.info('LitRes: загрузка обложки: ' + cover_url)
         try:
-            import requests
-            resp = requests.get(
-                cover_url,
-                headers={'User-Agent': 'Mozilla/5.0 (Calibre LitRes Metadata)'},
-                timeout=timeout + 10,
-                verify=False,
-            )
-            raw = resp.content
+            br = self.browser
+            old_headers = list(br.addheaders)
+            try:
+                br.addheaders = old_headers + [
+                    ('User-Agent',
+                     'Mozilla/5.0 (Calibre LitRes Metadata)'),
+                ]
+                resp = br.open_novisit(cover_url, timeout=timeout + 10)
+                raw = resp.read()
+            finally:
+                br.addheaders = old_headers
             if raw and len(raw) > 1024:
                 result_queue.put((self, raw))
-                log('LitRes: обложка загружена (' + str(len(raw)) + ' байт)')
+                log.info('LitRes: обложка загружена ('
+                         + str(len(raw)) + ' байт)')
             else:
-                log('LitRes: обложка слишком мала или пустая')
+                log.info('LitRes: обложка слишком мала или пустая')
         except Exception as e:
-            log('LitRes: ошибка загрузки обложки: ' + str(e))
+            log.error('LitRes: ошибка загрузки обложки: ' + str(e))
 
     def get_book_url(self, identifiers=None):
         identifiers = identifiers or {}
@@ -584,7 +604,9 @@ class LitResMetadata(Source):
         return 'LitRes Metadata'
 
     def id_from_url(self, url):
-        match = re.match(r'https?://(?:www\.)?litres\.ru/(?:book|audiobook|work)/(\d+)/?', url)
+        match = re.match(
+            r'https?://(?:www\.)?litres\.ru/(?:book|audiobook|work)/(\d+)/?',
+            url)
         if match:
             return ('litres', match.group(1))
         return None
