@@ -23,7 +23,7 @@ def save_settings(settings):
 
 def get_settings():
     """Возвращает текущие настройки плагина."""
-    return dict(prefs.defaults)
+    return dict(prefs)  # ← исправлено: dict(prefs), а не dict(prefs.defaults)
 
 
 class ConfigDialog(QDialog):
@@ -39,19 +39,19 @@ class ConfigDialog(QDialog):
         self.delay_spin = QSpinBox()
         self.delay_spin.setRange(0, 30)
         self.delay_spin.setSuffix(' сек')
-        self.delay_spin.setValue(self.settings['delay_seconds'])
+        self.delay_spin.setValue(self.settings.get('delay_seconds', 1))
         self.delay_spin.setToolTip('Защита от блокировки')
         form.addRow('Задержка между запросами:', self.delay_spin)
 
         self.max_results_spin = QSpinBox()
         self.max_results_spin.setRange(1, 20)
-        self.max_results_spin.setValue(self.settings['max_results'])
+        self.max_results_spin.setValue(self.settings.get('max_results', 5))
         form.addRow('Макс. результатов:', self.max_results_spin)
 
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(10, 120)
         self.timeout_spin.setSuffix(' сек')
-        self.timeout_spin.setValue(self.settings['timeout'])
+        self.timeout_spin.setValue(self.settings.get('timeout', 30))
         form.addRow('Таймаут запроса:', self.timeout_spin)
 
         hint = QLabel(

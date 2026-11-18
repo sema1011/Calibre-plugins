@@ -14,7 +14,7 @@ class Labirint(Source):
     description = _('Downloads book metadata from Labirint.ru')
     supported_platforms = ['windows', 'osx', 'linux']
     author = 'sema1011'
-    version = (1, 3, 18)
+    version = (1, 3, 19)
     minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -22,6 +22,7 @@ class Labirint(Source):
         'title', 'authors', 'identifier:isbn', 'comments',
     ])
     has_html_comments = True
+    ignore_ssl_errors = True
 
     BASE_URL = 'https://www.labirint.ru'
 
@@ -37,11 +38,15 @@ class Labirint(Source):
     # ---- Настройки ----------------------------------------------------
 
     def _get_settings(self):
-        from calibre_plugins.Labirint.config import get_settings, DEFAULTS
         try:
+            from calibre_plugins.Labirint.config import get_settings
             return get_settings()
         except Exception:
-            return dict(DEFAULTS)
+            return {
+                'delay_seconds': 1,
+                'max_results': 5,
+                'timeout': 30,
+            }
 
     def _apply_delay(self, log):
         settings = self._get_settings()
@@ -59,37 +64,45 @@ class Labirint(Source):
     # ---- HTTP запросы -------------------------------------------------
 
     def _get_page(self, url, timeout=10, max_retries=2, log=None):
-        """Запрос страницы через requests — надёжнее curl."""
-        import requests
+        """Запрос страницы через self.browser — надёжнее requests."""
+        br = self.browser
         for attempt in range(max_retries + 1):
             try:
                 self._apply_delay(log)
-                resp = requests.get(
-                    url,
-                    headers={
-                        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
-                    },
-                    timeout=timeout + 15,
-                    verify=False,
-                    allow_redirects=True,
-                )
-                data = resp.text
+                old_headers = list(br.addheaders)
+                try:
+                    br.addheaders = old_headers + [
+                        ('User-Agent',
+                         'Mozilla/5.0 (X11; Linux x86_64) '
+                         'AppleWebKit/537.36 (KHTML, like Gecko) '
+                         'Chrome/120.0.0.0 Safari/537.36'),
+                        ('Accept',
+                         'text/html,application/xhtml+xml,'
+                         'application/xml;q=0.9,*/*;q=0.8'),
+                        ('Accept-Language', 'ru-RU,ru;q=0.9,en;q=0.8'),
+                    ]
+                    resp = br.open_novisit(url, timeout=timeout + 15)
+                    data = resp.read().decode('utf-8', errors='replace')
+                finally:
+                    br.addheaders = old_headers
                 if log:
-                    log(f'Labirint: fetched {len(data)} bytes')
+                    log.info(f'Labirint: fetched {len(data)} bytes')
                 return data
             except Exception as e:
                 if log:
-                    log(f'Labirint: error (attempt {attempt+1}): {e}')
+                    log.error(f'Labirint: error (attempt {attempt+1}): {e}')
                 if attempt < max_retries:
                     wait = (attempt + 1) * 5
                     if log:
-                        log(f'Labirint: retry {attempt+1}/{max_retries} in {wait}s')
+                        log.info(
+                            f'Labirint: retry {attempt+1}/{max_retries} '
+                            f'in {wait}s')
                     time.sleep(wait)
                 else:
                     if log:
-                        log(f'Labirint: error after {max_retries} retries: {e}')
+                        log.error(
+                            f'Labirint: error after {max_retries} '
+                            f'retries: {e}')
         return None
 
     # ---- Поиск --------------------------------------------------------
@@ -104,33 +117,35 @@ class Labirint(Source):
         ]:
             data = self._get_page(f'{self.BASE_URL}{path}', timeout, log=log)
             if data:
-                results = self._parse_search_results(log, data, title=title, authors=authors)
+                results = self._parse_search_results(
+                    log, data, title=title, authors=authors)
                 if results:
                     return results
         return []
 
     def _filter_by_keywords(self, title_text, search_title, min_keyword_len=4):
-        """Проверяет, содержит ли результат хотя бы одно ключевое слово из запроса.
-        Берём только первые слова из title (без авторов)."""
+        """Проверяет, содержит ли результат хотя бы одно ключевое слово
+        из запроса. Берём только первые слова из title (без авторов)."""
         if not search_title:
             return True
-        
+
         # Берём только первые 3 слова из title (без авторов)
         title_words = search_title.split()[:3]
         if not title_words:
             return True
-        
+
         title_lower = title_text.lower()
         # Результат должен содержать хотя бы одно ключевое слово
         for word in title_words:
-            if len(word) > 2 and word.lower() in title_lower:
+            if len(word) > min_keyword_len and word.lower() in title_lower:
                 return True
-        
+
         return False
 
     # ---- Парсинг результатов поиска -----------------------------------
 
-    def _parse_search_results(self, log, html, title=None, authors=None, isbn=None):
+    def _parse_search_results(self, log, html, title=None, authors=None,
+                              isbn=None):
         results = []
         if not html:
             return []
@@ -141,32 +156,45 @@ class Labirint(Source):
         # Ищем карточки товаров — пробуем несколько возможных структур
         cards = soup.find_all('div', class_='product-card')
         if not cards:
-            cards = soup.find_all('div', class_=re.compile(r'product-card|js-product-card', re.I))
+            cards = soup.find_all(
+                'div',
+                class_=re.compile(r'product-card|js-product-card', re.I))
         if not cards:
             # Fallback: ищем все ссылки на /books/
             book_links = soup.find_all('a', href=re.compile(r'/books/\d+/'))
             if book_links:
-                log(f'Labirint: found {len(book_links)} book links (fallback parsing)')
+                log.info(
+                    f'Labirint: found {len(book_links)} book links '
+                    f'(fallback parsing)')
                 for link in book_links[:5]:
                     parent = link.find_parent(['div', 'li'])
                     if parent:
-                        title_text = parent.find(['h1', 'h2', 'h3', 'h4', 'span'], class_=re.compile(r'name|title', re.I))
+                        title_text = parent.find(
+                            ['h1', 'h2', 'h3', 'h4', 'span'],
+                            class_=re.compile(r'name|title', re.I))
                         if title_text:
                             title_text = title_text.get_text(strip=True)
-                            author_tag = parent.find(class_=re.compile(r'author', re.I))
-                            auth = author_tag.get_text(strip=True) if author_tag else None
-                            
+                            author_tag = parent.find(
+                                class_=re.compile(r'author', re.I))
+                            auth = (author_tag.get_text(strip=True)
+                                    if author_tag else None)
+
                             img = parent.find('img')
-                            img_url = img.get('data-src') or img.get('src', '') if img else ''
-                            
+                            img_url = (img.get('data-src')
+                                       or img.get('src', '')
+                                       if img else '')
+
                             href = link.get('href', '')
-                            book_id_match = re.search(r'/books/(\d+)/', href)
-                            book_id = book_id_match.group(1) if book_id_match else ''
-                            
+                            book_id_match = re.search(
+                                r'/books/(\d+)/', href)
+                            book_id = (book_id_match.group(1)
+                                       if book_id_match else '')
+
                             # Фильтр: результат должен содержать ключевые слова
-                            if title and not self._filter_by_keywords(title_text, title):
+                            if title and not self._filter_by_keywords(
+                                    title_text, title):
                                 continue
-                            
+
                             results.append({
                                 'title': title_text,
                                 'author': auth,
@@ -181,18 +209,22 @@ class Labirint(Source):
 
         for card in cards[:max_results]:
             # Название
-            name = card.find(class_=re.compile(r'product-card__name|name', re.I))
+            name = card.find(
+                class_=re.compile(r'product-card__name|name', re.I))
             title_text = name.get_text(strip=True) if name else None
             if not title_text:
                 continue
 
             # Автор
-            author = card.find(class_=re.compile(r'product-card__author|author', re.I))
+            author = card.find(
+                class_=re.compile(r'product-card__author|author', re.I))
             auth = author.get_text(strip=True) if author else None
 
             # Изображение
-            img = card.find('img', class_=re.compile(r'book-img-cover|cover', re.I))
-            img_url = img.get('data-src') or img.get('src', '') if img else ''
+            img = card.find(
+                'img', class_=re.compile(r'book-img-cover|cover', re.I))
+            img_url = (img.get('data-src') or img.get('src', '')
+                       if img else '')
 
             # Ссылка на товар (извлекаем book_id)
             link_tag = card.find('a', href=re.compile(r'/books/'))
@@ -228,7 +260,8 @@ class Labirint(Source):
         try:
             # Название из h1
             h1 = soup.find('h1')
-            title = h1.get_text(strip=True) if h1 else search_result.get('title', 'Unknown')
+            title = (h1.get_text(strip=True)
+                     if h1 else search_result.get('title', 'Unknown'))
 
             # Автор из h1 (формат: "Title: Author")
             author = ''
@@ -243,7 +276,7 @@ class Labirint(Source):
 
             # Аннотация — приоритет: JSON из script > div > og:description
             description = ''
-            
+
             # 1. Ищем в JSON данных (полная аннотация)
             for script in soup.find_all('script'):
                 if script.string:
@@ -257,15 +290,18 @@ class Labirint(Source):
                                 desc = re.sub(r'<[^>]+>', '', desc)
                                 description = desc.strip()
                                 break
-                    except:
+                    except (json.JSONDecodeError, ValueError):
                         pass
-            
+
             # 2. Fallback: div с текстом
             if not description:
-                desc_div = soup.find('div', class_=re.compile(r'_text_ctofl_17|annotation|description', re.I))
+                desc_div = soup.find(
+                    'div',
+                    class_=re.compile(
+                        r'_text_ctofl_17|annotation|description', re.I))
                 if desc_div:
                     description = desc_div.get_text(strip=True)
-            
+
             # 3. Fallback: og:description
             if not description:
                 meta = soup.find('meta', property='og:description')
@@ -273,10 +309,11 @@ class Labirint(Source):
 
             # ISBN из текста страницы (ищем в разных форматах)
             isbn = ''
-            # Ищем ISBN в HTML (не только в тексте, но и в атрибутах)
             isbn_patterns = [
-                r'ISBN[:\s]*["\']?(\d{3}[-\s]?\d{1,5}[-\s]?\d{1,5}[-\s]?\d{1,5}[-\s]?\d{1,5})',
-                r'isbn[:\s]*["\']?(\d{3}[-\s]?\d{1,5}[-\s]?\d{1,5}[-\s]?\d{1,5}[-\s]?\d{1,5})',
+                r'ISBN[:\s]*["\']?(\d{3}[-\s]?\d{1,5}[-\s]?\d{1,5}'
+                r'[-\s]?\d{1,5}[-\s]?\d{1,5})',
+                r'isbn[:\s]*["\']?(\d{3}[-\s]?\d{1,5}[-\s]?\d{1,5}'
+                r'[-\s]?\d{1,5}[-\s]?\d{1,5})',
                 r'ISBN[:\s]*["\']?(\d{13})',
                 r'isbn[:\s]*["\']?(\d{13})',
             ]
@@ -293,10 +330,13 @@ class Labirint(Source):
             imgs = soup.find_all('img')
             for img in imgs:
                 src = img.get('data-src') or img.get('src', '')
-                if src and ('cover' in src.lower() or 'imo10.labirint.ru' in src):
+                if src and ('cover' in src.lower()
+                            or 'imo10.labirint.ru' in src):
                     cover_url = src
                     if not src.startswith('http'):
-                        cover_url = 'https:' + src if src.startswith('//') else self.BASE_URL + src
+                        cover_url = ('https:' + src
+                                     if src.startswith('//')
+                                     else self.BASE_URL + src)
                     # Убираем размер из URL (242-0 → 400-0 для JPEG)
                     cover_url = re.sub(r'/\d+-0$', '/400-0', cover_url)
                     break
@@ -306,7 +346,9 @@ class Labirint(Source):
 
             # Формируем MI
             book_id = search_result.get('book_id', '')
-            authors_list = [a.strip() for a in author.split(',') if a.strip()] if author else ['Unknown']
+            authors_list = (
+                [a.strip() for a in author.split(',') if a.strip()]
+                if author else ['Unknown'])
             mi = Metadata(title, authors_list)
             mi.source_relevance = 0
 
@@ -316,13 +358,16 @@ class Labirint(Source):
                 mi.set_identifier('labirint', book_id)
             if description:
                 mi.comments = description
-                mi.has_html_comments = True
-            mi.url = f'{self.BASE_URL}/books/{book_id}/' if book_id else ''
+            mi.url = (f'{self.BASE_URL}/books/{book_id}/'
+                      if book_id else '')
 
-            log(f'Labirint: parsed — title={title[:50]}, author={author[:30]}, isbn={isbn}, cover={bool(cover_url)}')
+            log.info(
+                f'Labirint: parsed — title={title[:50]}, '
+                f'author={author[:30]}, isbn={isbn}, '
+                f'cover={bool(cover_url)}')
             return mi
         except Exception as e:
-            log(f'Labirint: error parsing book details: {e}')
+            log.error(f'Labirint: error parsing book details: {e}')
             return None
 
     # ---- Интерфейс Source ---------------------------------------------
@@ -336,22 +381,26 @@ class Labirint(Source):
         effective_timeout = settings.get('timeout', 10)
         max_results = settings.get('max_results', 5)
 
-        log('Labirint: starting identify')
+        log.info('Labirint: starting identify')
 
         labirint_id = identifiers.get('labirint')
 
         # Проверяем, не передан ли URL
-        labirint_url = identifiers.get('labirint_url') or identifiers.get('url')
+        labirint_url = (identifiers.get('labirint_url')
+                        or identifiers.get('url'))
         if labirint_url:
-            labirint_id = self.id_from_url(labirint_url)
-            if labirint_id:
-                labirint_id = labirint_id[1]  # extract ID from tuple
+            id_from_url = self.id_from_url(labirint_url)
+            if id_from_url:
+                labirint_id = id_from_url[1]  # extract ID from tuple
 
         if labirint_id:
-            log(f'Labirint: loading by ID: {labirint_id}')
-            data = self._fetch_product_page(log, labirint_id, effective_timeout)
+            log.info(f'Labirint: loading by ID: {labirint_id}')
+            data = self._fetch_product_page(
+                log, labirint_id, effective_timeout)
             if data:
-                mi = self._parse_book_details(log, data, {'title': '', 'author': '', 'book_id': labirint_id})
+                mi = self._parse_book_details(
+                    log, data,
+                    {'title': '', 'author': '', 'book_id': labirint_id})
                 if mi:
                     mi.source_relevance = 0
                     self.clean_downloaded_metadata(mi)
@@ -360,17 +409,19 @@ class Labirint(Source):
 
         # Ищем только по названию/автору
         if not (title or authors):
-            log('Labirint: no title/authors to search')
+            log.info('Labirint: no title/authors to search')
             return None
 
-        log(f'Labirint: searching by title/author: {title} / {authors}')
-        search_results = self._search_by_title_author(log, title, authors, effective_timeout)
+        log.info(
+            f'Labirint: searching by title/author: {title} / {authors}')
+        search_results = self._search_by_title_author(
+            log, title, authors, effective_timeout)
 
         if not search_results:
-            log('Labirint: no search results')
+            log.info('Labirint: no search results')
             return None
 
-        log(f'Labirint: found {len(search_results)} results')
+        log.info(f'Labirint: found {len(search_results)} results')
 
         threads = []
 
@@ -378,7 +429,8 @@ class Labirint(Source):
             if abort.is_set():
                 return
             if sr.get('book_id'):
-                data = self._fetch_product_page(log, sr['book_id'], effective_timeout)
+                data = self._fetch_product_page(
+                    log, sr['book_id'], effective_timeout)
                 if data:
                     mi = self._parse_book_details(log, data, sr)
                     if mi:
@@ -388,7 +440,7 @@ class Labirint(Source):
 
         limit = min(len(search_results), max_results)
         for idx, sr in enumerate(search_results[:limit]):
-            t = Thread(target=parse_and_queue, args=(sr, idx))
+            t = Thread(target=parse_and_queue, args=(sr, idx), daemon=True)
             threads.append(t)
             t.start()
 
@@ -408,88 +460,105 @@ class Labirint(Source):
         effective_timeout = settings.get('timeout', 10)
 
         labirint_id = identifiers.get('labirint')
-        log(f'Labirint: download_cover start, labirint_id={labirint_id}')
+        log.info(
+            f'Labirint: download_cover start, labirint_id={labirint_id}')
 
         if not labirint_id:
             isbn = identifiers.get('isbn')
             if isbn:
-                log(f'Labirint: searching by ISBN for cover: {isbn}')
-                results = self._search_by_title_author(log, isbn, [], effective_timeout)
+                log.info(f'Labirint: searching by ISBN for cover: {isbn}')
+                results = self._search_by_title_author(
+                    log, isbn, [], effective_timeout)
                 if results:
                     labirint_id = results[0].get('book_id', '')
-                    log(f'Labirint: found book_id={labirint_id} by ISBN')
+                    log.info(
+                        f'Labirint: found book_id={labirint_id} by ISBN')
                 else:
-                    log('Labirint: no results by ISBN for cover')
+                    log.info('Labirint: no results by ISBN for cover')
             else:
-                log('Labirint: no labirint_id or isbn for cover')
+                log.info('Labirint: no labirint_id or isbn for cover')
                 return None
 
         if not labirint_id:
             return None
 
-        log(f'Labirint: fetching product page for cover: {labirint_id}')
+        log.info(
+            f'Labirint: fetching product page for cover: {labirint_id}')
         data = self._fetch_product_page(log, labirint_id, effective_timeout)
         if not data:
-            log('Labirint: no data for cover')
+            log.info('Labirint: no data for cover')
             return None
 
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(data, 'html.parser')
-        
+
         # Ищем обложку
         cover_url = ''
         imgs = soup.find_all('img')
-        log(f'Labirint: found {len(imgs)} images on page')
+        log.info(f'Labirint: found {len(imgs)} images on page')
         for i, img in enumerate(imgs):
             src = img.get('data-src') or img.get('src', '')
-            if src and ('cover' in src.lower() or 'imo10.labirint.ru' in src):
+            if src and ('cover' in src.lower()
+                        or 'imo10.labirint.ru' in src):
                 cover_url = src
                 if not src.startswith('http'):
-                    cover_url = 'https:' + src if src.startswith('//') else self.BASE_URL + src
+                    cover_url = ('https:' + src
+                                 if src.startswith('//')
+                                 else self.BASE_URL + src)
                 # Убираем размер из URL (242-0 → 400-0 для JPEG)
                 cover_url = re.sub(r'/\d+-0$', '/400-0', cover_url)
-                log(f'Labirint: found cover image at index {i}: {cover_url[:100]}')
+                log.info(
+                    f'Labirint: found cover image at index {i}: '
+                    f'{cover_url[:100]}')
                 break
 
         if not cover_url:
-            log('Labirint: no cover URL found in images')
+            log.info('Labirint: no cover URL found in images')
             return None
 
-        log(f'Labirint: downloading cover from {cover_url}')
-        # Скачиваем обложку через requests
+        log.info(f'Labirint: downloading cover from {cover_url}')
         try:
             self._apply_delay(log)
-            import requests
-            resp = requests.get(
-                cover_url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Referer': f'{self.BASE_URL}/books/{labirint_id}/',
-                },
-                timeout=effective_timeout + 15,
-                verify=False,
-            )
-            cover_data = resp.content
-            log(f'Labirint: cover downloaded, size={len(cover_data)} bytes')
+            br = self.browser
+            old_headers = list(br.addheaders)
+            try:
+                br.addheaders = old_headers + [
+                    ('User-Agent',
+                     'Mozilla/5.0 (X11; Linux x86_64) '
+                     'AppleWebKit/537.36 (KHTML, like Gecko) '
+                     'Chrome/120.0.0.0 Safari/537.36'),
+                    ('Referer', f'{self.BASE_URL}/books/{labirint_id}/'),
+                ]
+                resp = br.open_novisit(cover_url,
+                                       timeout=effective_timeout + 15)
+                cover_data = resp.read()
+            finally:
+                br.addheaders = old_headers
+            log.info(
+                f'Labirint: cover downloaded, '
+                f'size={len(cover_data)} bytes')
             if cover_data and len(cover_data) > 100:
                 # Конвертирую WebP → JPEG (Labirint всегда отдаёт WebP)
                 try:
                     from PIL import Image
                     import io
                     img = Image.open(io.BytesIO(cover_data))
-                    if img.format == 'WEBP':
-                        jpeg_buf = io.BytesIO()
-                        img.convert('RGB').save(jpeg_buf, format='JPEG')
-                        cover_data = jpeg_buf.getvalue()
-                        log(f'Labirint: cover converted to JPEG, size={len(cover_data)}')
+                    jpeg_buf = io.BytesIO()
+                    img.convert('RGB').save(jpeg_buf, format='JPEG')
+                    cover_data = jpeg_buf.getvalue()
+                    log.info(
+                        f'Labirint: cover converted to JPEG, '
+                        f'size={len(cover_data)}')
                 except Exception as conv_err:
-                    log(f'Labirint: cover conversion failed: {conv_err}')
-                
+                    log.warning(
+                        f'Labirint: cover conversion failed: {conv_err}')
+
                 result_queue.put((self, cover_data))
             else:
-                log(f'Labirint: cover too small, size={len(cover_data)}')
+                log.info(
+                    f'Labirint: cover too small, size={len(cover_data)}')
         except Exception as e:
-            log(f'Labirint: cover download error: {e}')
+            log.error(f'Labirint: cover download error: {e}')
 
         return None
 
