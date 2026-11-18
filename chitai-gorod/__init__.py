@@ -17,7 +17,7 @@ class ChitaiGorod(Source):
     name = 'ChitaiGorod'
     description = 'Метаданные книг с сайта chitai-gorod.ru'
     author = 'sema1011'
-    version = (1, 5, 1)
+    version = (1, 5, 2)
     minimum_calibre_version = (8, 9, 0)
 
     capabilities = frozenset(['identify', 'cover'])
@@ -25,54 +25,55 @@ class ChitaiGorod(Source):
                                 'identifier:chitaigorod', 'pubdate',
                                 'publisher', 'comments'])
     supports_gzip_transfer_encoding = True
-    has_html_comments = True
+    has_html_comments = False
 
     BASE_URL = 'https://www.chitai-gorod.ru'
     API_URL = 'https://web-agr.chitai-gorod.ru'
 
     def _get_anon_token(self, br, log, timeout=30):
-        """Получает анонимный токен для API ChitaiGorod."""
-        import urllib.request
-        import ssl
-        
+        """Получает анонимный токен для API ChitaiGorod.
+
+        Использует self.browser (br) вместо urllib.request, чтобы:
+        - учитывать настройки Calibre (прокси, cookies, user-agent);
+        - учитывать ignore_ssl_errors (если установлен);
+        - не отключать SSL-проверку вручную.
+        """
         token_url = f'{self.API_URL}/web/api/v1/auth/anonymous'
-        
+        old_headers = list(br.addheaders)
         try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            
-            req = urllib.request.Request(
+            br.addheaders = old_headers + [
+                ('Accept', 'application/json'),
+                ('Content-Type', 'application/json'),
+            ]
+            resp = br.open_novisit(
                 token_url,
-                data=b'',  # POST with empty body
-                headers={
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-                },
-                method='POST'
+                data=b'{}',
+                timeout=timeout,
             )
-            resp = urllib.request.urlopen(req, timeout=timeout, context=ctx)
             raw = resp.read().decode('utf-8', errors='replace')
             data = json.loads(raw)
-            # Токен уже содержит "Bearer " в начале
             token = data.get('token', {}).get('accessToken', '')
             if token:
-                log.info(f'ChitaiGorod: анонимный токен получен')
+                log.info('ChitaiGorod: анонимный токен получен')
                 return token
             log.warning('ChitaiGorod: токен не найден в ответе')
             return None
         except Exception as e:
             log.error(f'ChitaiGorod: ошибка получения токена: {e}')
             return None
+        finally:
+            br.addheaders = old_headers
 
     def identify(self, log, result_queue, abort,
                  title=None, authors=None, identifiers={}, timeout=30):
         br = self.browser
+        if br is None:
+            log.error('ChitaiGorod: browser not initialized')
+            return
 
         token = self._get_anon_token(br, log, timeout)
         if not token:
-            log.error('ChitaiGorod: не удалось получить анонимный токен')
+            log.warning('ChitaiGorod: не удалось получить анонимный токен')
             return
 
         isbn = identifiers.get('isbn', None)
@@ -112,11 +113,13 @@ class ChitaiGorod(Source):
 
         log.info(f'ChitaiGorod: найдено {len(products)} результатов')
 
-        for prod in products[:5]:
+        for idx, prod in enumerate(products[:5]):
             if abort.is_set():
                 return
             mi = self._fetch_metadata(br, log, prod, token, timeout)
             if mi:
+                mi.source_relevance = idx
+                self.clean_downloaded_metadata(mi)
                 result_queue.put(mi)
 
     # ── URL-хелперы ────────────────────────────────────────────────
@@ -224,8 +227,9 @@ class ChitaiGorod(Source):
                     if mi:
                         slug = item.get('slug', '')
                         prod_id = item.get('id', '')
-                        if mi.identifiers.get('isbn', '') == isbn_var \
-                                or re.sub(r'[^0-9Xx]', '', mi.identifiers.get('isbn', '')) == isbn_var:
+                        mi_isbn = mi.identifiers.get('isbn') or ''
+                        if mi_isbn == isbn_var \
+                                or re.sub(r'[^0-9Xx]', '', mi_isbn) == isbn_var:
                             log.info(f'ChitaiGorod [ISBN lookup]: {mi.title}')
                             self._set_ids(mi, slug, prod_id)
                             return mi
@@ -273,8 +277,7 @@ class ChitaiGorod(Source):
                 r'<meta[^>]*itemprop=["\']description["\'][^>]*content=["\']([^"\']*)["\']']:
             m = re.search(pat, html, re.DOTALL | re.IGNORECASE)
             if m:
-                text = re.sub(r'<[^>]+>', ' ', m.group(1) if m.lastindex == 1
-                              else m.group(1))
+                text = re.sub(r'<[^>]+>', ' ', m.group(1))
                 text = re.sub(r'\s+', ' ', text).strip()
                 if text and len(text) > 20:
                     return text
@@ -317,6 +320,8 @@ class ChitaiGorod(Source):
             is_isbn: если True, не использует recommend/semantic fallback,
                      т.к. это бессмысленно для ISBN.
         """
+        if abort.is_set():
+            return []
         # ОСНОВНОЙ эндпоинт поиска — /web/api/v2/search/product
         api_url = (f'{self.API_URL}/web/api/v2/search/product'
                    f'?phrase={quote(query)}&page=1&perPage=10'
@@ -390,7 +395,7 @@ class ChitaiGorod(Source):
 
     def _parse_jsonapi_products(self, data, log):
         """Парсит ответ API в формате JSON:API.
-        
+
         Формат:
           data.relationships.products.data -> список {id, type}
           data.included -> массив полных объектов с attributes
@@ -406,7 +411,7 @@ class ChitaiGorod(Source):
         # Строим карту ID -> full object из included
         included_map = {}
         for item in included:
-            if isinstance(item, dict) and item.get('type') == 'product':
+            if isinstance(item, dict) and item.get('type', '').lower() == 'product':
                 pid = item.get('id', '')
                 if pid:
                     included_map[str(pid)] = item
@@ -485,7 +490,7 @@ class ChitaiGorod(Source):
 
     def _html_search(self, br, log, query, timeout, abort):
         """Ищет книги через HTML-страницу поиска.
-        
+
         Для SPA-сайта также пытается извлечь данные из встроенного JSON.
         """
         url = f'{self.BASE_URL}/search/?q={quote(query)}'
@@ -615,11 +620,10 @@ class ChitaiGorod(Source):
             m = re.search(r'(\d{4,})$', slug)
             if m:
                 mi.set_identifier('chitaigorod', m.group(1))
-        mi.source_relevance = 1
 
     def _parse_product_data(self, item, log):
         """Создаёт Metadata из dict (ответ API).
-        
+
         Поддерживает как прямой формат, так и JSON:API attributes.
         """
         if not isinstance(item, dict) or not item:
@@ -682,12 +686,14 @@ class ChitaiGorod(Source):
         if desc:
             clean = re.sub(r'<[^>]+>', '', str(desc)).strip()
             if clean and len(clean) > 20:
-                mi.comments = (mi.comments + '\n' if mi.comments else '') + clean
+                existing = mi.comments or ''
+                mi.comments = (existing + '\n' if existing else '') + clean
 
         # --- Страницы ---
         pages = item.get('pages')
         if pages:
-            mi.comments = (mi.comments + '\n' if mi.comments else '') + \
+            existing = mi.comments or ''
+            mi.comments = (existing + '\n' if existing else '') + \
                           f'Страниц: {pages}'
 
         # --- Обложка ---
@@ -817,9 +823,10 @@ class ChitaiGorod(Source):
         return mi
 
     def download_cover(self, log, result_queue, abort,
-                       title=None, authors=None, identifiers={}, timeout=30):
+                       title=None, authors=None, identifiers={}, timeout=30,
+                       get_best_cover=False):
         """Скачивает обложку по ISBN или slug/chitaigorod id.
-        
+
         Calibre передаёт title, authors, identifiers, timeout — мы ищем
         продукт через API и скачиваем обложку.
         """
@@ -857,7 +864,7 @@ class ChitaiGorod(Source):
         # 2. Если ISBN не помог — пробуем chg_id (числовой ID)
         if not url and chg_id:
             log.info(f'ChitaiGorod [cover]: trying chg_id={chg_id}')
-            url = self._fetch_cover_from_api(log, str(chg_id), timeout, abort)
+            url = self._fetch_cover_by_id(log, str(chg_id), timeout, abort)
             if url:
                 log.info(f'ChitaiGorod [cover]: found via chg_id API')
             else:
@@ -903,6 +910,28 @@ class ChitaiGorod(Source):
             result_queue.put((self, None))
             return
 
+    def get_book_url(self, identifiers):
+        """Возвращает ссылку на книгу на chitai-gorod.ru."""
+        chg_id = identifiers.get('chitaigorod')
+        if chg_id:
+            return ('chitaigorod', chg_id,
+                    f'{self.BASE_URL}/product/{chg_id}')
+        return None
+
+    def get_book_url_name(self, idtype, idval, url):
+        return 'ChitaiGorod'
+
+    def id_from_url(self, url):
+        """Парсит URL и возвращает (identifier_type, identifier_value)."""
+        m = re.search(r'/product/([^/?#]+)', url)
+        if m:
+            slug = m.group(1)
+            m2 = re.search(r'(\d{4,})$', slug)
+            if m2:
+                return ('chitaigorod', m2.group(1))
+            return ('chitaigorod', slug)
+        return None
+
     def _fetch_cover_from_api(self, log, slug, timeout, abort):
         """Пытается получить обложку через API продукта."""
         api_url = f'{self.API_URL}/web/api/v1/products/slug/{slug}'
@@ -947,6 +976,32 @@ class ChitaiGorod(Source):
         else:
             log.error(f'ChitaiGorod [cover API]: cover_url не найден, keys={list(item.keys())[:15]}')
         return cover_url
+
+    def _fetch_cover_by_id(self, log, prod_id, timeout, abort):
+        """Получает обложку по числовому ID продукта (не slug)."""
+        api_url = f'{self.API_URL}/web/api/v1/products/info/{prod_id}'
+        br = self.browser
+        token = self._get_anon_token(br, log, timeout)
+        if not token:
+            return None
+        old_headers = list(br.addheaders)
+        try:
+            br.addheaders = old_headers + [
+                ('Authorization', token),
+                ('Accept', 'application/json'),
+            ]
+            resp = br.open_novisit(api_url, timeout=timeout)
+            raw = resp.read().decode('utf-8', errors='replace')
+            data = json.loads(raw)
+        except Exception as e:
+            log.error(f'ChitaiGorod [cover by id]: ошибка: {e}')
+            return None
+        finally:
+            br.addheaders = old_headers
+        item = data.get('data', data) if isinstance(data, dict) else data
+        if not isinstance(item, dict):
+            return None
+        return self._extract_cover_from_item(item)
 
     def _fetch_cover_from_html(self, log, slug, timeout, abort):
         """Пытается получить обложку из HTML страницы продукта."""
